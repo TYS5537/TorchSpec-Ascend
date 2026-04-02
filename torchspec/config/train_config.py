@@ -85,6 +85,7 @@ class ModelConfig:
     draft_model_config: Optional[str] = None
     embedding_key: str = "model.embed_tokens.weight"
     lm_head_key: str = "lm_head.weight"
+    norm_key: str = "model.norm.weight"
     target_model_backend: str = "sglang"
     target_model_path: str = ""
     trust_remote_code: bool = False
@@ -312,6 +313,9 @@ def config_to_flat_args(config: DictConfig) -> argparse.Namespace:
     )
     if flat.get("continual_training") and not flat.get("load_path"):
         logger.warning("continual_training=True but no training.load_path was provided")
+
+    if "last_hidden_states_prenorm" not in flat or flat["last_hidden_states_prenorm"] is None:
+        flat["last_hidden_states_prenorm"] = flat.get("inference_engine_type") == "vllm"
 
     return argparse.Namespace(**flat)
 
