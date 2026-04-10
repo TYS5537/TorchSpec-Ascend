@@ -133,7 +133,16 @@ class RayActor:
         """
         if base_gpu_id is None:
             ids = _get_accel_ids()
-            base_gpu_id = int(float(ids[0])) if ids else 0
+            if ids:
+                base_gpu_id = int(float(ids[0]))
+            else:
+                resource_name = _get_accel_resource_name()
+                logger.warning(
+                    f"No '{resource_name}' resource IDs found for this Ray worker "
+                    f"(is the cluster started with --resources='{\"{resource_name}\": N}')? "
+                    "Falling back to device 0, which may be incorrect for multi-device setups."
+                )
+                base_gpu_id = 0
         local_gpu_id = self.resolve_local_gpu_id(base_gpu_id)
         accel.set_device(local_gpu_id)
         os.environ["LOCAL_RANK"] = str(local_gpu_id)

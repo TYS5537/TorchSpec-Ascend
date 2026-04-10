@@ -38,11 +38,23 @@ Usage:
 
 import argparse
 import math
+import sys
 import time
 
 import torch
 
 from torchspec.utils import accelerator as accel
+
+if accel.is_npu():
+    print(
+        "bench_eagle3_mask_modes.py: this benchmark requires CUDA flash-attention "
+        "(flash_attn.cute) and is not supported on Ascend NPU. "
+        "Use 'attention_backend=sdpa' or 'flex_attention' for NPU benchmarking via "
+        "tools/benchmark_eagle3.py instead.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 from torchspec.models.draft.llama3_eagle import (
     _build_eagle3_mask_pair,
     _EagleMaskedFlashAttnFunc,

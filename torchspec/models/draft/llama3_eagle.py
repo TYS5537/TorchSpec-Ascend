@@ -198,6 +198,9 @@ except ImportError:
 
 # Detect SM major version once at import time.
 # SM90 (H100/H200) requires block_sparse_tensors in _flash_attn_bwd with mask_mod.
+# On Ascend NPU, accel.get_device_capability() returns (9, 0) as a sentinel so that
+# ">= N" feature gates remain conservative (>= 10 is False on NPU, == 9 guards also
+# check accel.is_cuda(), so NPU never incorrectly enters CUDA-only paths).
 _cuda_sm_major: int = accel.get_device_capability()[0] if accel.is_available() else 0
 
 
@@ -1500,9 +1503,13 @@ class LlamaFlashAttention(LlamaAttention):
             attn_output = result[0].float()
             # result[1]=softmax_max, result[2]=softmax_sum (split-K per-tile intermediates).
             # Global per-token LSE = logsumexp over tiles of per-tile LSE_t = max_t + log(sum_t).
+            # clamp instead of additive epsilon: fully masked rows yield -inf LSE (correct),
+            # not log(1e-8) ≈ -18.4 which would corrupt the multi-block logsumexp below.
             softmax_max = result[1].float()  # [bsz, num_heads, q_len, tiles]
             softmax_sum = result[2].float()  # [bsz, num_heads, q_len, tiles]
-            per_tile_lse = softmax_max + torch.log(softmax_sum + 1e-8)
+            per_tile_lse = softmax_max + torch.log(
+                softmax_sum.clamp(min=torch.finfo(torch.float32).tiny)
+            )
             lse = torch.logsumexp(per_tile_lse, dim=-1)  # [bsz, num_heads, q_len]
             lse = lse.transpose(1, 2)  # [bsz, q_len, num_heads]
         else:
@@ -1676,6 +1683,8 @@ class LlamaFlashAttentionMasked(LlamaAttention):
                 atten_mask=attn_mask_npu,
                 keep_prob=1.0,
             )
+            # Keep in the kernel's native dtype (bf16/fp16); no multi-block LSE
+            # aggregation is needed here, so an extra .float() cast is unnecessary.
             attn_output = result[0]
         else:
             max_seq_len = q_len

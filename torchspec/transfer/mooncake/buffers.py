@@ -38,8 +38,19 @@ class HostBuffer:
 
     def __init__(self, size: int):
         self.size = size
-        # Allocate pinned CPU memory for RDMA compatibility
-        self._tensor = torch.empty(size, dtype=torch.uint8, pin_memory=True)
+        # Allocate pinned CPU memory for RDMA compatibility.
+        # pin_memory=True requires a CUDA or torch_npu-compatible pinned allocator.
+        # On NPU-only systems the CUDA runtime is absent, so we fall back to
+        # regular (unpinned) memory; RDMA may still work but with lower throughput.
+        try:
+            self._tensor = torch.empty(size, dtype=torch.uint8, pin_memory=True)
+        except RuntimeError:
+            logger.warning(
+                "HostBuffer: pin_memory unavailable on this platform "
+                "(no CUDA runtime and torch_npu pinned allocator not registered). "
+                "Falling back to non-pinned CPU memory; RDMA throughput may be lower."
+            )
+            self._tensor = torch.empty(size, dtype=torch.uint8)
         self._ptr = self._tensor.data_ptr()
 
     @property
@@ -291,8 +302,8 @@ class GPUSendBuffer(_GPUBuffer):
 
     Pre-allocates contiguous GPU memory registered with Mooncake so that
     put operations can stage tensors with a fast GPU-to-GPU copy (~5ms for 1.2GB)
-    instead of GPU-to-CPU (~150ms). The NIC reads directly from GPU memory via
-    nvidia_peermem (GPU Direct RDMA).
+    instead of GPU-to-CPU (~150ms). The NIC reads directly from device memory via
+    peer DMA (nvidia_peermem on CUDA, or the equivalent CANN/HCCL path on NPU).
     """
 
     _label = "GPU send"
