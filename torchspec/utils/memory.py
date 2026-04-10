@@ -72,7 +72,7 @@ def available_memory():
     device = accel.current_device()
     free, total = accel.mem_get_info(device)
     return {
-        "gpu": str(device),
+        "device": str(device),
         "total_GB": _byte_to_gb(total),
         "free_GB": _byte_to_gb(free),
         "used_GB": _byte_to_gb(total - free),

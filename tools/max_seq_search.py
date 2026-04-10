@@ -241,7 +241,7 @@ def test_seq_len(
         clear_memory()
         return True, peak_mem, None
 
-    except torch.cuda.OutOfMemoryError as e:
+    except torch.OutOfMemoryError as e:
         reset_optimizer_state(optimizer)
         clear_memory()
         return False, 0.0, f"OOM: {str(e)[:100]}"

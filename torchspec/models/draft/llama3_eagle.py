@@ -1853,10 +1853,16 @@ class LlamaDecoderLayer(nn.Module):
         elif attention_backend == "flex_attention":
             print_with_rank("Using flex attention on draft model training!")
             self.self_attn = LlamaFlexAttention(config=config)
-        elif attention_backend == "fa4":
-            self.self_attn = LlamaFlashAttentionMasked(config=config)
-        elif attention_backend == "fa_low_acc":
-            self.self_attn = LlamaFlashAttention(config=config)
+        elif attention_backend in ("fa4", "fa_low_acc"):
+            if accel.is_npu():
+                raise ValueError(
+                    f"attention_backend='{attention_backend}' requires CUDA flash-attention "
+                    "and is not supported on Ascend NPU. Use 'sdpa' or 'flex_attention' instead."
+                )
+            if attention_backend == "fa4":
+                self.self_attn = LlamaFlashAttentionMasked(config=config)
+            else:
+                self.self_attn = LlamaFlashAttention(config=config)
         else:
             raise ValueError(f"Unknown attention backend {attention_backend}")
 

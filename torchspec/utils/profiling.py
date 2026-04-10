@@ -89,7 +89,7 @@ def _create_torch_profiler(args, name):
         record_shapes=True,
         with_stack=True,
         profile_memory=True,
-        with_flops=True,
+        with_flops=accel.is_cuda(),
     )
 
 

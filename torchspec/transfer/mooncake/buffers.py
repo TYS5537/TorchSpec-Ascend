@@ -61,7 +61,7 @@ class HostBuffer:
         # Get a view into our buffer at the right offset
         host_view = self._tensor[offset : offset + nbytes]
 
-        # PyTorch .copy_() handles CUDA→pinned-CPU directly in one DMA.
+        # PyTorch .copy_() handles device→pinned-CPU directly in one DMA.
         # No need for .cpu() which would create an intermediate unpinned copy.
         host_view.copy_(tensor.view(torch.uint8).view(-1))
 
@@ -166,7 +166,7 @@ class AsyncPutManager:
         *owner_buffer_ptr* is the base pointer of the host buffer that owns the
         staged data — used as the key for :meth:`wait_for_buffer`.
 
-        *wait_event* is an optional CUDA event to synchronize on before the
+        *wait_event* is an optional device event to synchronize on before the
         RDMA transfer (used when DtoH staging runs on a separate stream).
 
         *device_index* is the device ordinal that owns *wait_event*.
@@ -174,7 +174,7 @@ class AsyncPutManager:
         worker must call ``accel.set_device`` before synchronizing.
 
         GPU tensor lifetime is managed by the caller via
-        ``record_stream`` — the CUDA caching allocator keeps the underlying
+        ``record_stream`` — the device memory allocator keeps the underlying
         memory alive until the copy stream passes the recorded point.
         """
         future = self._executor.submit(
@@ -300,8 +300,8 @@ class GPUSendBuffer(_GPUBuffer):
     def copy_from_tensor(self, tensor: torch.Tensor, offset: int = 0) -> int:
         """Copy tensor data into this GPU buffer at the given offset.
 
-        The source tensor must be on the same CUDA device. This is a fast
-        GPU-to-GPU copy within device memory.
+        The source tensor must be on the same device. This is a fast
+        device-to-device copy within accelerator memory.
 
         Returns the number of bytes copied.
         """

@@ -27,6 +27,7 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from torchspec.ray.ray_actor import _accel_options
+from torchspec.utils import accelerator as accel
 from torchspec.utils.env import get_torchspec_env_vars
 
 
@@ -82,12 +83,13 @@ class RayTrainGroup:
 
         env_vars = {
             **get_torchspec_env_vars(),
-            "NCCL_CUMEM_ENABLE": os.environ.get("NCCL_CUMEM_ENABLE", "0"),
-            "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": os.environ.get(
-                "NVTE_FP8_BLOCK_SCALING_FP32_SCALES", "1"
-            ),
             **train_env_vars,
         }
+        if accel.is_cuda():
+            env_vars["NCCL_CUMEM_ENABLE"] = os.environ.get("NCCL_CUMEM_ENABLE", "0")
+            env_vars["NVTE_FP8_BLOCK_SCALING_FP32_SCALES"] = os.environ.get(
+                "NVTE_FP8_BLOCK_SCALING_FP32_SCALES", "1"
+            )
         if "TORCHINDUCTOR_CACHE_DIR" in os.environ:
             env_vars["TORCHINDUCTOR_CACHE_DIR"] = os.environ["TORCHINDUCTOR_CACHE_DIR"]
 

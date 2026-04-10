@@ -60,7 +60,7 @@ class HFEngine(InferenceEngine, RayActor):
         setup_file_logging("inference", self.rank, group=engine_group)
 
     def init(self, mooncake_config=None) -> None:
-        """Initialize the HFRunner on the allocated GPU.
+        """Initialize the HFRunner on the allocated device.
 
         This is called after the Ray actor is scheduled on a node.
 
@@ -72,8 +72,8 @@ class HFEngine(InferenceEngine, RayActor):
         if self.base_gpu_id is not None:
             local_gpu_id = self.setup_gpu(self.base_gpu_id)
             logger.info(
-                f"HFEngine rank {self.rank}: base_gpu_id={self.base_gpu_id}, "
-                f"using local GPU {local_gpu_id}"
+                f"HFEngine rank {self.rank}: base_device_id={self.base_gpu_id}, "
+                f"using local device {local_gpu_id}"
             )
 
         self._mooncake_config = mooncake_config

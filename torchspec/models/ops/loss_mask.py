@@ -57,7 +57,7 @@ def _numba_loss_mask(ids, header, header_len, end, end_len, out, skip_after):
 
 
 def _to_contiguous_int64_numpy(t: torch.Tensor) -> np.ndarray:
-    if t.is_cuda:
+    if t.device.type != "cpu":
         t = t.cpu()
     if t.dtype != torch.int64:
         t = t.to(torch.int64)

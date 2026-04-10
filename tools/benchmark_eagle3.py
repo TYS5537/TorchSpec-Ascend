@@ -179,7 +179,7 @@ def try_seq_len(model, optimizer, T, B, H, V, warmup_iters=2, test_iters=3) -> T
         peak_mem = accel.max_memory_allocated() / 1024**3
         clear_memory()
         return True, peak_mem
-    except torch.cuda.OutOfMemoryError:
+    except torch.OutOfMemoryError:
         reset_optimizer_state(optimizer)
         clear_memory()
         return False, 0.0
@@ -288,7 +288,7 @@ def time_eagle3(model, optimizer, B, T, H, V, warmup=3, repeats=10) -> Tuple[flo
 def _try_time(model, optimizer, B, T, H, V, **kwargs):
     try:
         return time_eagle3(model, optimizer, B, T, H, V, **kwargs)
-    except (torch.cuda.OutOfMemoryError, RuntimeError):
+    except (torch.OutOfMemoryError, RuntimeError):
         reset_optimizer_state(optimizer)
         clear_memory()
         return float("inf"), 0.0

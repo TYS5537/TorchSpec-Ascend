@@ -24,6 +24,7 @@ import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from torchspec.ray.ray_actor import _accel_options
+from torchspec.utils import accelerator as accel
 from torchspec.utils.env import get_torchspec_env_vars
 from torchspec.utils.logging import logger
 
@@ -45,6 +46,12 @@ def create_inference_engines(args, inference_pg, mooncake_config, engine_group: 
 
     if engine_type not in ("hf", "sgl", "vllm"):
         raise ValueError(f"Unknown inference_engine_type: {engine_type}")
+
+    if accel.is_npu() and engine_type in ("sgl", "vllm"):
+        raise ValueError(
+            f"inference_engine_type='{engine_type}' is not supported on Ascend NPU. "
+            "Use inference_engine_type='hf' instead."
+        )
 
     logger.info(f"Using {engine_type} engine for inference")
 
@@ -77,6 +84,12 @@ def prepare_inference_engines(args, inference_pg, mooncake_config, engine_group:
 
     if engine_type not in ("hf", "sgl", "vllm"):
         raise ValueError(f"Unknown inference_engine_type: {engine_type}")
+
+    if accel.is_npu() and engine_type in ("sgl", "vllm"):
+        raise ValueError(
+            f"inference_engine_type='{engine_type}' is not supported on Ascend NPU. "
+            "Use inference_engine_type='hf' instead."
+        )
 
     logger.info(f"Preparing {engine_type} inference engines...")
 

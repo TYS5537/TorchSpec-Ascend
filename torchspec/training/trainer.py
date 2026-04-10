@@ -335,7 +335,7 @@ class Trainer(abc.ABC):
         self.global_step += 1
 
         metrics = self._aggregate_metrics(all_step_metrics, step, grad_norm=grad_norm)
-        # _aggregate_metrics calls .item() which syncs CUDA —
+        # _aggregate_metrics calls .item() which syncs the device —
         # all recorded events are now completed, safe to query without extra sync
         if perf:
             compute_time_ms = sum(s.elapsed_time(e) for s, e in compute_events)
