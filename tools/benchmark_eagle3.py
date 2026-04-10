@@ -19,6 +19,8 @@ from typing import Tuple
 import torch
 from transformers.models.llama.configuration_llama import LlamaConfig
 
+from torchspec.utils import accelerator as accel
+
 from torchspec.models.draft.llama3_eagle import LlamaForCausalLMEagle3
 from torchspec.models.eagle3 import (
     Eagle3Model,
@@ -32,9 +34,9 @@ from torchspec.training.optimizer import BF16Optimizer
 # Helpers (aligned with max_seq_search.py)
 # ---------------------------------------------------------------------------
 def clear_memory():
-    torch.cuda.synchronize()
+    accel.synchronize()
     gc.collect()
-    torch.cuda.empty_cache()
+    accel.empty_cache()
 
 
 def make_config(H, V, num_heads=32, num_kv_heads=8):
@@ -60,8 +62,10 @@ def make_eagle3_model(
     length=7,
     gradient_checkpointing=True,
     attention_backend="flex_attention",
-    device="cuda",
+    device=None,
 ):
+    if device is None:
+        device = accel.get_device_type()
     draft_model = LlamaForCausalLMEagle3(config, attention_backend=attention_backend)
     draft_model = draft_model.to(device=device, dtype=torch.bfloat16)
     draft_model.freeze_embedding()
@@ -84,8 +88,10 @@ def reset_optimizer_state(optimizer: BF16Optimizer):
     optimizer.optimizer.state.clear()
 
 
-def create_synthetic_batch(B, T, H, V, device="cuda"):
+def create_synthetic_batch(B, T, H, V, device=None):
     """Create synthetic training batch matching Eagle3 expected format."""
+    if device is None:
+        device = accel.get_device_type()
     input_ids = torch.randint(0, V, (B, T), device=device)
     attention_mask = torch.ones(B, T, dtype=torch.long, device=device)
     loss_mask = (torch.rand(B, T, device=device) > 0.5).float()
@@ -161,7 +167,7 @@ def run_train_step(model, optimizer, B, T, H, V):
 def try_seq_len(model, optimizer, T, B, H, V, warmup_iters=2, test_iters=3) -> Tuple[bool, float]:
     reset_optimizer_state(optimizer)
     clear_memory()
-    torch.cuda.reset_peak_memory_stats()
+    accel.reset_peak_memory_stats()
 
     try:
         for i in range(warmup_iters + test_iters):
@@ -169,8 +175,8 @@ def try_seq_len(model, optimizer, T, B, H, V, warmup_iters=2, test_iters=3) -> T
             if i == warmup_iters - 1:
                 clear_memory()
 
-        torch.cuda.synchronize()
-        peak_mem = torch.cuda.max_memory_allocated() / 1024**3
+        accel.synchronize()
+        peak_mem = accel.max_memory_allocated() / 1024**3
         clear_memory()
         return True, peak_mem
     except torch.cuda.OutOfMemoryError:
@@ -262,20 +268,20 @@ def time_eagle3(model, optimizer, B, T, H, V, warmup=3, repeats=10) -> Tuple[flo
 
     for _ in range(warmup):
         run_train_step(model, optimizer, B, T, H, V)
-        torch.cuda.synchronize()
+        accel.synchronize()
 
-    torch.cuda.synchronize()
-    torch.cuda.reset_peak_memory_stats()
+    accel.synchronize()
+    accel.reset_peak_memory_stats()
     times = []
     for _ in range(repeats):
-        torch.cuda.synchronize()
+        accel.synchronize()
         t0 = time.perf_counter()
         run_train_step(model, optimizer, B, T, H, V)
-        torch.cuda.synchronize()
+        accel.synchronize()
         t1 = time.perf_counter()
         times.append((t1 - t0) * 1000)
 
-    peak_mem = torch.cuda.max_memory_allocated() / 1024**3
+    peak_mem = accel.max_memory_allocated() / 1024**3
     return sum(times) / len(times), peak_mem
 
 
@@ -366,8 +372,8 @@ def main():
 
     config = make_config(H, V, num_heads=args.num_heads, num_kv_heads=args.num_kv_heads)
 
-    free, total = torch.cuda.mem_get_info()
-    print(f"GPU: {torch.cuda.get_device_name()}")
+    free, total = accel.mem_get_info()
+    print(f"Device: {accel.get_device_name()}")
     print(f"Memory: {total / 1024**3:.1f} GB total, {free / 1024**3:.1f} GB free")
     print(f"Config: B={B}, H={H}, V={V}, length={args.length}")
     print(f"        num_heads={args.num_heads}, num_kv_heads={args.num_kv_heads}")
@@ -406,7 +412,7 @@ def main():
     print("=" * 70)
     print("SUMMARY")
     print("=" * 70)
-    print(f"  GPU: {torch.cuda.get_device_name()}")
+    print(f"  Device: {accel.get_device_name()}")
     print(f"  Config: B={B}, H={H}, V={V}, length={args.length}")
     print(f"  Gradient checkpointing: {'ON' if grad_ckpt else 'OFF'}")
     print(f"  Max sequence length: {max_seq}")

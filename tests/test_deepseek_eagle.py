@@ -16,6 +16,8 @@ import torch
 import torch.nn.functional as F
 from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
 
+from torchspec.utils import accelerator as accel
+
 from torchspec.models.draft.auto import AutoDraftModelConfig, AutoEagle3DraftModel
 from torchspec.models.draft.deepseek_eagle import (
     DeepSeekMLAAttention,
@@ -383,6 +385,18 @@ class TestEagle3ModelTTT(unittest.TestCase):
                 msg=f"Loss mismatch at position {i}",
             )
 
+    @unittest.skipUnless(accel.is_npu(), "NPU not available")
+    def test_losses_match_npu(self):
+        plosses_pre, acces_pre, plosses_lazy, acces_lazy = self._run_both_paths("npu")
+        for i, (pre, lazy) in enumerate(zip(plosses_pre, plosses_lazy)):
+            torch.testing.assert_close(
+                pre,
+                lazy,
+                atol=1e-3,
+                rtol=1e-3,
+                msg=f"Loss mismatch at position {i}",
+            )
+
 
 class TestFlexAttentionTTT(unittest.TestCase):
     """Eagle3Model TTT loop with MLA + flex_attention backend."""
@@ -457,6 +471,77 @@ class TestFlexAttentionTTT(unittest.TestCase):
                 atol=1e-2,
                 rtol=1e-2,
                 msg=f"SDPA vs Flex loss mismatch at step {i}",
+            )
+
+    @unittest.skipUnless(accel.is_npu(), "NPU not available")
+    def test_sdpa_losses_finite_npu(self):
+        """SDPA backend (used on NPU) should produce finite non-negative losses."""
+        torch.manual_seed(42)
+        H, V, B, T, length = 64, 256, 1, 32, 3
+        config = _make_config(H=H, V=V)
+        model = _make_model(config, length=length, device="npu", attention_backend="sdpa")
+        batch = _make_batch(B, T, H, V, device="npu")
+
+        draft_model = model.draft_model
+        _, lm_head_weight, _ = draft_model.get_lm_head_params()
+
+        with torch.no_grad():
+            target_logits = F.linear(batch["target_hidden_states"], lm_head_weight.detach())
+            target_p = F.softmax(target_logits.float(), dim=-1)
+        target_p_padded = F.pad(target_p, (0, 0, 0, length), value=0.0)
+
+        precomputed = PrecomputedTarget(target_p_padded)
+        with torch.no_grad():
+            plosses, _, acces = model(
+                input_ids=batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                target=precomputed,
+                loss_mask=batch["loss_mask"],
+                hidden_states=batch["hidden_states"],
+            )
+
+        for i, loss in enumerate(plosses):
+            self.assertTrue(torch.isfinite(loss), f"Loss {i} is not finite: {loss}")
+            self.assertGreaterEqual(loss.item(), 0.0, f"Loss {i} is negative: {loss}")
+
+    @unittest.skipUnless(accel.is_npu(), "NPU not available")
+    def test_flex_matches_sdpa_npu(self):
+        """On NPU, flex_attention falls back to SDPA; both backends must produce identical losses."""
+        torch.manual_seed(42)
+        H, V, B, T, length = 64, 256, 1, 32, 3
+        config = _make_config(H=H, V=V)
+        batch = _make_batch(B, T, H, V, device="npu")
+
+        results = {}
+        for backend in ("sdpa", "flex_attention"):
+            torch.manual_seed(42)
+            model = _make_model(config, length=length, device="npu", attention_backend=backend)
+            draft_model = model.draft_model
+            _, lm_head_weight, _ = draft_model.get_lm_head_params()
+
+            with torch.no_grad():
+                target_logits = F.linear(batch["target_hidden_states"], lm_head_weight.detach())
+                target_p = F.softmax(target_logits.float(), dim=-1)
+            target_p_padded = F.pad(target_p, (0, 0, 0, length), value=0.0)
+
+            precomputed = PrecomputedTarget(target_p_padded)
+            with torch.no_grad():
+                plosses, _, _ = model(
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    target=precomputed,
+                    loss_mask=batch["loss_mask"],
+                    hidden_states=batch["hidden_states"],
+                )
+            results[backend] = plosses
+
+        for i, (sdpa_loss, flex_loss) in enumerate(zip(results["sdpa"], results["flex_attention"])):
+            torch.testing.assert_close(
+                sdpa_loss,
+                flex_loss,
+                atol=1e-4,
+                rtol=1e-4,
+                msg=f"SDPA vs Flex (NPU fallback) loss mismatch at step {i}",
             )
 
 

@@ -29,6 +29,7 @@ from torchspec.config.utils import generate_draft_model_config
 from torchspec.models.eagle3 import compute_lazy_target_padded, compute_target_p_padded
 from torchspec.models.target.target_utils import TargetLMHead
 from torchspec.training.optimizer import BF16Optimizer
+from torchspec.utils import accelerator as accel
 from torchspec.utils.memory import available_memory, clear_memory
 
 
@@ -37,11 +38,13 @@ def create_synthetic_batch(
     seq_len: int,
     hidden_dim: int,
     draft_vocab_size: int,
-    device: str = "cuda",
+    device: Optional[str] = None,
     last_turn_loss: bool = False,
     loss_ratio: float = 0.01,
 ) -> dict:
     """Create synthetic training batch matching Eagle3 expected format."""
+    if device is None:
+        device = accel.get_device_type()
     input_ids = torch.randint(0, draft_vocab_size, (batch_size, seq_len), device=device)
     attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long, device=device)
 
@@ -73,7 +76,7 @@ def create_eagle3_model(
     draft_config_path: Optional[str] = None,
     draft_vocab_size: Optional[int] = None,
     ttt_length: int = 7,
-    device: str = "cuda",
+    device: Optional[str] = None,
     attention_backend: str = "flex_attention",
     embedding_key: str = "model.embed_tokens.weight",
     trust_remote_code: bool = False,
@@ -125,6 +128,8 @@ def create_eagle3_model(
         gradient_checkpointing=gradient_checkpointing,
     )
 
+    if device is None:
+        device = accel.get_device_type()
     eagle3_model = eagle3_model.to(device)
     return eagle3_model
 
@@ -210,7 +215,7 @@ def test_seq_len(
     """
     reset_optimizer_state(optimizer)
     clear_memory()
-    torch.cuda.reset_peak_memory_stats()
+    accel.reset_peak_memory_stats()
 
     try:
         for i in range(warmup_iters + test_iters):
@@ -229,10 +234,10 @@ def test_seq_len(
 
             if i == warmup_iters - 1:
                 clear_memory()
-                torch.cuda.reset_peak_memory_stats()
+                accel.reset_peak_memory_stats()
 
-        torch.cuda.synchronize()
-        peak_mem = torch.cuda.max_memory_allocated() / 1024**3
+        accel.synchronize()
+        peak_mem = accel.max_memory_allocated() / 1024**3
         clear_memory()
         return True, peak_mem, None
 

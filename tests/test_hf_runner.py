@@ -7,6 +7,7 @@ import torch
 from torchspec.config.inference_config import HFInferenceConfig
 from torchspec.config.mooncake_config import MooncakeConfig
 from torchspec.inference.engine.hf_runner import HFRunner
+from torchspec.utils import accelerator as accel  # noqa: F401 (imported for side-effect: device detection)
 
 
 class MockMooncakeStore:
@@ -57,7 +58,7 @@ class TestHFRunnerInitMooncakeStore:
             "torchspec.inference.engine.hf_runner.EagleMooncakeStore",
             MockMooncakeStore,
         ):
-            with patch("torch.cuda.current_device", return_value=0):
+            with patch("torchspec.utils.accelerator.current_device", return_value=0):
                 store = engine.init_mooncake_store()
 
         assert engine.mooncake_store is not None
@@ -77,7 +78,7 @@ class TestHFRunnerInitMooncakeStore:
             "torchspec.inference.engine.hf_runner.EagleMooncakeStore",
             MockMooncakeStore,
         ):
-            with patch("torch.cuda.current_device", return_value=0):
+            with patch("torchspec.utils.accelerator.current_device", return_value=0):
                 store = engine.init_mooncake_store(explicit_config)
 
         assert store.config.master_server_address == "explicit:50051"
@@ -111,7 +112,7 @@ class TestHFRunnerInitMooncakeStore:
                 "torchspec.inference.engine.hf_runner.EagleMooncakeStore",
                 MockMooncakeStore,
             ):
-                with patch("torch.cuda.current_device", return_value=0):
+                with patch("torchspec.utils.accelerator.current_device", return_value=0):
                     engine.setup()
 
         assert engine.mooncake_store is not None

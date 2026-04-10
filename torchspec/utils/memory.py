@@ -24,6 +24,7 @@ from typing import Dict, Tuple
 import torch
 import torch.distributed as dist
 
+from torchspec.utils import accelerator as accel
 from torchspec.utils.logging import logger
 
 DTYPE_SIZES = {
@@ -60,23 +61,23 @@ def estimate_tensor_bytes(tensor_shapes: Dict[str, Tuple[int, ...]], tensor_dtyp
 
 
 def clear_memory(clear_host_memory: bool = False):
-    torch.cuda.synchronize()
+    accel.synchronize()
     gc.collect()
-    torch.cuda.empty_cache()
+    accel.empty_cache()
     if clear_host_memory:
         torch._C._host_emptyCache()
 
 
 def available_memory():
-    device = torch.cuda.current_device()
-    free, total = torch.cuda.mem_get_info(device)
+    device = accel.current_device()
+    free, total = accel.mem_get_info(device)
     return {
         "gpu": str(device),
         "total_GB": _byte_to_gb(total),
         "free_GB": _byte_to_gb(free),
         "used_GB": _byte_to_gb(total - free),
-        "allocated_GB": _byte_to_gb(torch.cuda.memory_allocated(device)),
-        "reserved_GB": _byte_to_gb(torch.cuda.memory_reserved(device)),
+        "allocated_GB": _byte_to_gb(accel.memory_allocated(device)),
+        "reserved_GB": _byte_to_gb(accel.memory_reserved(device)),
     }
 
 

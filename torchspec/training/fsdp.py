@@ -25,6 +25,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 
+from torchspec.utils import accelerator as accel
 from torchspec.utils.logging import logger
 
 
@@ -112,9 +113,9 @@ def fsdp2_load_full_state_dict(model, full_state, device_mesh, cpu_offload):
     )
 
     if dist.get_rank() == 0:
-        model = model.to(device=torch.cuda.current_device(), non_blocking=True)
+        model = model.to(device=accel.current_device(), non_blocking=True)
     else:
-        model = model.to_empty(device=torch.cuda.current_device())
+        model = model.to_empty(device=accel.current_device())
 
     is_cpu_offload = cpu_offload is not None
     options = StateDictOptions(
@@ -129,7 +130,7 @@ def fsdp2_load_full_state_dict(model, full_state, device_mesh, cpu_offload):
     if is_cpu_offload:
         model.to("cpu", non_blocking=True)
         for buf in model.buffers():
-            buf.data = buf.data.to(torch.cuda.current_device())
+            buf.data = buf.data.to(accel.current_device())
 
     return model
 

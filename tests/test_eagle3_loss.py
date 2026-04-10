@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from transformers.models.llama.configuration_llama import LlamaConfig
 
 from torchspec.models.draft.llama3_eagle import LlamaForCausalLMEagle3
+from torchspec.utils import accelerator as accel
 from torchspec.models.eagle3 import (
     Eagle3Model,
     PrecomputedTarget,
@@ -276,6 +277,26 @@ class TestLazyVsPrecomputedTarget(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
     def test_losses_match_cuda(self):
         plosses_pre, acces_pre, plosses_lazy, acces_lazy = self._run_both_paths("cuda")
+        for i, (pre, lazy) in enumerate(zip(plosses_pre, plosses_lazy)):
+            torch.testing.assert_close(
+                pre,
+                lazy,
+                atol=1e-3,
+                rtol=1e-3,
+                msg=f"Loss mismatch at position {i}",
+            )
+        for i, (pre, lazy) in enumerate(zip(acces_pre, acces_lazy)):
+            torch.testing.assert_close(
+                pre,
+                lazy,
+                atol=1e-3,
+                rtol=1e-3,
+                msg=f"Accuracy mismatch at position {i}",
+            )
+
+    @unittest.skipUnless(accel.is_npu(), "NPU not available")
+    def test_losses_match_npu(self):
+        plosses_pre, acces_pre, plosses_lazy, acces_lazy = self._run_both_paths("npu")
         for i, (pre, lazy) in enumerate(zip(plosses_pre, plosses_lazy)):
             torch.testing.assert_close(
                 pre,

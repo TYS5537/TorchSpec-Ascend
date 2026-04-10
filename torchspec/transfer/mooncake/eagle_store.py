@@ -28,6 +28,7 @@ import torch
 from torchspec.transfer.mooncake.deferred_delete import DeferredDeleteManager
 from torchspec.transfer.mooncake.helpers import _format_bytes
 from torchspec.transfer.mooncake.store import MooncakeHiddenStateStore
+from torchspec.utils import accelerator as accel
 from torchspec.utils.logging import logger
 
 if TYPE_CHECKING:
@@ -179,18 +180,18 @@ class EagleMooncakeStore(MooncakeHiddenStateStore):
 
             # Stage DtoH on a dedicated stream so the default (compute) stream
             # is free to run the next prefill concurrently.
-            compute_event = torch.cuda.Event()
+            compute_event = accel.Event()
             compute_event.record()
 
-            with torch.cuda.stream(self._copy_stream):
+            with accel.stream(self._copy_stream):
                 self._copy_stream.wait_event(compute_event)
                 buffer_ptrs, sizes = self._stage_tensors_into_buffer(buf, tensors)
-                copy_done = torch.cuda.Event()
+                copy_done = accel.Event()
                 copy_done.record()
 
             for t in tensors:
-                if t.is_cuda:
-                    t.record_stream(self._copy_stream)
+                if accel.is_on_accelerator(t):
+                    accel.record_stream(t, self._copy_stream)
 
             self._async_put_manager.submit(
                 keys,

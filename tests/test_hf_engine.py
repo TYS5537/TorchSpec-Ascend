@@ -221,7 +221,7 @@ class TestHFEngineSetup:
             "torchspec.inference.engine.hf_runner.HFRunner",
             mock_engine_class,
         ):
-            with patch("torch.cuda.set_device") as mock_set_device:
+            with patch("torchspec.utils.accelerator.set_device") as mock_set_device:
                 with patch("torchspec.ray.ray_actor._to_local_gpu_id", return_value=0):
                     engine.init(mooncake_config=None)
 

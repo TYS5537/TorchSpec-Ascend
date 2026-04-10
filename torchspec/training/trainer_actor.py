@@ -27,6 +27,7 @@ import torch.distributed as dist
 from torchspec import AutoDraftModelConfig
 from torchspec.ray.ray_actor import RayActor
 from torchspec.training.eagle3_trainer import Eagle3Trainer
+from torchspec.utils import accelerator as accel
 from torchspec.utils.distributed import init_gloo_group
 from torchspec.utils.logging import setup_file_logging
 
@@ -52,7 +53,7 @@ class TrainerActor(RayActor):
         backend = getattr(args, "distributed_backend", "nccl")
         if getattr(args, "fsdp_cpu_offload", False) and getattr(args, "fsdp_cpu_backend", None):
             cpu_backend = args.fsdp_cpu_backend
-            backend = f"cpu:{cpu_backend},cuda:{backend}"
+            backend = f"cpu:{cpu_backend},{accel.get_device_type()}:{backend}"
 
         dist.init_process_group(
             backend=backend,

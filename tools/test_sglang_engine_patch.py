@@ -26,6 +26,8 @@ import traceback
 
 import torch
 
+from torchspec.utils import accelerator as accel
+
 
 def find_free_port(start=10000, end=60000):
     for port in range(start, end):
@@ -184,7 +186,7 @@ def test_spec_training(model_path, aux_layer_ids=None):
 
     mc_config = MooncakeConfig.from_env()
     mc_store = EagleMooncakeStore(mc_config)
-    mc_store.setup(device=torch.device("cuda:0"))
+    mc_store.setup(device=accel.current_device_obj())
 
     from transformers import AutoConfig
 
@@ -208,7 +210,7 @@ def test_spec_training(model_path, aux_layer_ids=None):
     print(f"  Retrieving key: {key}")
     print(f"  Expected shapes: {shapes}")
 
-    output = mc_store.get(key, shapes, dtypes, device=torch.device("cuda:0"))
+    output = mc_store.get(key, shapes, dtypes, device=accel.current_device_obj())
 
     # --- Verify shapes ---
     print("\n=== Verifying tensors ===")

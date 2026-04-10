@@ -38,6 +38,8 @@ import ray
 import torch
 from omegaconf import DictConfig, OmegaConf
 
+from torchspec.utils import accelerator as accel
+
 from torchspec.inference.engine.base import InferenceEngine
 from torchspec.ray.ray_actor import RayActor
 from torchspec.transfer.mooncake.eagle_store import HIDDEN_STATES_STORAGE_DTYPE
@@ -375,8 +377,8 @@ class VllmEngine(InferenceEngine, RayActor):
         from torchspec.transfer.mooncake.eagle_store import EagleMooncakeStore
 
         self._mooncake_store = EagleMooncakeStore(self._mooncake_config)
-        if torch.cuda.is_available():
-            self._mooncake_store.setup(device=torch.cuda.current_device())
+        if accel.is_available():
+            self._mooncake_store.setup(device=accel.current_device())
         else:
             self._mooncake_store.setup()
 

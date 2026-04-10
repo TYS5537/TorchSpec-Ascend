@@ -24,6 +24,7 @@ from pathlib import Path
 
 import torch
 
+from torchspec.utils import accelerator as accel
 from torchspec.utils.logging import logger
 from torchspec.utils.memory import print_memory
 
@@ -116,6 +117,10 @@ class _BaseMemoryProfiler:
 
 class _TorchMemoryProfiler(_BaseMemoryProfiler):
     def start(self):
+        if not accel.is_cuda():
+            logger.warning("_TorchMemoryProfiler: CUDA memory snapshot not supported on NPU; skipping.")
+            return
+
         logger.info("Attach OOM dump memory history.")
 
         torch.cuda.memory._record_memory_history(
@@ -134,6 +139,9 @@ class _TorchMemoryProfiler(_BaseMemoryProfiler):
         torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
     def stop(self):
+        if not accel.is_cuda():
+            return
+
         logger.info(f"Dump memory snapshot to: {self._path_dump}")
         torch.cuda.memory._dump_snapshot(self._path_dump)
         torch.cuda.memory._record_memory_history(enabled=None)

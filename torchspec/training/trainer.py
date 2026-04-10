@@ -37,6 +37,7 @@ from torch.distributed.checkpoint.state_dict import (
 from torch.distributed.device_mesh import init_device_mesh
 
 from torchspec.config.mooncake_config import MooncakeConfig
+from torchspec.utils import accelerator as accel
 from torchspec.data.utils import DataCollatorWithPadding
 from torchspec.training import checkpoint
 from torchspec.training.data_fetcher import MooncakeDataFetcher
@@ -102,7 +103,9 @@ class Trainer(abc.ABC):
         self.dp_size = world_size
         self.dp_rank = rank
 
-        self.mesh = init_device_mesh("cuda", mesh_shape=(self.dp_size,), mesh_dim_names=("dp",))
+        self.mesh = init_device_mesh(
+            accel.get_device_type(), mesh_shape=(self.dp_size,), mesh_dim_names=("dp",)
+        )
         self.dp_group = self.mesh.get_group("dp")
         self.dp_mesh = self.mesh
 
@@ -138,7 +141,7 @@ class Trainer(abc.ABC):
         )
 
         store = EagleMooncakeStore(mooncake_config)
-        store.setup(device=torch.cuda.current_device())
+        store.setup(device=accel.current_device())
         self.mooncake_store = store
         logger.info(f"[Rank {self.dp_rank}] EagleMooncakeStore initialized")
         return store
@@ -164,7 +167,7 @@ class Trainer(abc.ABC):
             queue=self.train_queue,
             mooncake_store=self.mooncake_store,
             collator=collator,
-            device=torch.cuda.current_device(),
+            device=accel.current_device(),
             batch_size=per_dp_rank_batch_size,
             assistant_header_ids=self.assistant_header_ids,
             end_token_ids=self.end_token_ids,
@@ -196,7 +199,7 @@ class Trainer(abc.ABC):
             queue=queue,
             mooncake_store=self.mooncake_store,
             collator=collator,
-            device=torch.cuda.current_device(),
+            device=accel.current_device(),
             batch_size=per_dp_rank_batch_size,
             assistant_header_ids=self.assistant_header_ids,
             end_token_ids=self.end_token_ids,
@@ -292,7 +295,7 @@ class Trainer(abc.ABC):
         perf = self._enable_perf_metrics
         if perf:
             data_time = 0.0
-            compute_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
+            compute_events: list[tuple[accel.Event, accel.Event]] = []
             t_data_start = time.time()
 
         batches = self.prof.iterate_train_actor(self._iter_batches_from_queue(num_batches))
@@ -301,8 +304,8 @@ class Trainer(abc.ABC):
 
             if perf:
                 data_time += time.time() - t_data_start
-                evt_start = torch.cuda.Event(enable_timing=True)
-                evt_end = torch.cuda.Event(enable_timing=True)
+                evt_start = accel.Event(enable_timing=True)
+                evt_end = accel.Event(enable_timing=True)
                 evt_start.record()
 
             if logger.isEnabledFor(logging.DEBUG):

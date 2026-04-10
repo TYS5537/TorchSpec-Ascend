@@ -12,6 +12,7 @@ from torchspec.models.ops.flex_attention import (
     compile_friendly_flex_attention,
     generate_eagle3_mask,
 )
+from torchspec.utils import accelerator as accel
 from torchspec.utils.tensor import padding
 
 dynamo.config.recompile_limit = 64
@@ -19,6 +20,7 @@ TTT_LENGTH = 7
 torch.manual_seed(0)
 
 
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestFlexAttention(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(0)
@@ -229,6 +231,7 @@ class TestFlexAttention(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 class TestEagle3FlexMask(unittest.TestCase):
     def test_eagle3_flex_mask(self):
         B = 1
@@ -269,6 +272,86 @@ class TestEagle3FlexMask(unittest.TestCase):
         dense_mask = block_mask.to_dense()
         assert torch.allclose(dense_mask, expected_mask)
         compile_friendly_flex_attention(query, key_cache, value_cache, block_mask=block_mask)
+
+
+@unittest.skipUnless(accel.is_npu(), "NPU not available")
+class TestFlexAttentionNPU(unittest.TestCase):
+    """On NPU, LlamaFlexAttention falls back to SDPA.
+    Verify the forward pass produces finite output of the correct shape.
+    """
+
+    def setUp(self):
+        torch.manual_seed(0)
+        self.config_dict = {
+            "hidden_size": 128,
+            "num_attention_heads": 8,
+            "num_key_value_heads": 2,
+            "max_position_embeddings": 4096,
+            "rms_norm_eps": 1e-05,
+            "vocab_size": 32000,
+            "intermediate_size": 688,
+            "hidden_act": "silu",
+            "num_hidden_layers": 1,
+            "torch_dtype": "float32",
+        }
+        self.config = LlamaConfig(**self.config_dict)
+        self.dtype = torch.float32
+
+    def test_forward_produces_finite_output(self):
+        """LlamaFlexAttention on NPU (SDPA fallback) should produce finite output."""
+        seq_len = 128
+        batch_size = 2
+        hidden_size = self.config.hidden_size * 2
+
+        flex_attn = LlamaFlexAttention(self.config).to("npu").to(self.dtype)
+        flex_attn.eval()
+
+        position_ids = torch.arange(seq_len).unsqueeze(0).repeat(batch_size, 1).to("npu")
+        attention_mask = torch.ones(batch_size, seq_len, dtype=self.dtype).to("npu")
+        hidden_states = norm_tensor((batch_size, seq_len, hidden_size), device="npu", dtype=self.dtype)
+
+        with torch.no_grad():
+            out, _, _ = flex_attn(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                cache_keys=None,
+                cache_values=None,
+                use_cache=True,
+            )
+
+        self.assertEqual(out.shape, (batch_size, seq_len, self.config.hidden_size))
+        self.assertFalse(torch.isnan(out).any(), "Output contains NaN")
+        self.assertFalse(torch.isinf(out).any(), "Output contains Inf")
+
+
+@unittest.skipUnless(accel.is_npu(), "NPU not available")
+class TestEagle3FlexMaskNPU(unittest.TestCase):
+    """On NPU, compile_friendly_create_block_mask returns None and
+    compile_friendly_flex_attention falls back to SDPA.
+    Verify the complete path runs without error and produces finite output.
+    """
+
+    def test_sdpa_fallback_runs(self):
+        B, H, S, D = 1, 1, 64, 64
+        KV_LEN = S * 3
+        data_type = torch.bfloat16
+
+        query = norm_tensor((B, H, S, D), device="npu", dtype=data_type)
+        key_cache = norm_tensor((B, H, KV_LEN, D), device="npu", dtype=data_type)
+        value_cache = norm_tensor((B, H, KV_LEN, D), device="npu", dtype=data_type)
+        seq_lengths = torch.tensor([S], device="npu", dtype=torch.int32)
+
+        block_mask = compile_friendly_create_block_mask(
+            mask_mod=generate_eagle3_mask(seq_lengths=seq_lengths, Q_LEN=S, KV_LEN=KV_LEN),
+            B=B, H=H, Q_LEN=S, KV_LEN=KV_LEN, device=query.device,
+        )
+        self.assertIsNone(block_mask, "block_mask should be None on NPU")
+
+        out = compile_friendly_flex_attention(query, key_cache, value_cache, block_mask=block_mask)
+        self.assertEqual(out.shape, (B, H, S, D))
+        self.assertFalse(torch.isnan(out).any(), "Output contains NaN")
+        self.assertFalse(torch.isinf(out).any(), "Output contains Inf")
 
 
 if __name__ == "__main__":

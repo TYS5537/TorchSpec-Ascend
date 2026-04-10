@@ -50,6 +50,10 @@ fa = [
     "nvidia-cutlass-dsl-libs-base>=4.4.2",
 ]
 
+ascend = [
+    "torch-npu",
+]
+
 
 [tool.setuptools.dynamic]
 version = {file = "version.txt"}

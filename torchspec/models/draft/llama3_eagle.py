@@ -28,6 +28,8 @@ from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 from transformers.activations import ACT2FN
 from transformers.models.llama.configuration_llama import LlamaConfig
 
+from torchspec.utils import accelerator as accel
+
 from torchspec.models.draft.base import Eagle3DraftModel
 from torchspec.models.ops.flex_attention import (
     compile_friendly_create_block_mask,
@@ -188,7 +190,7 @@ except ImportError:
 
 # Detect SM major version once at import time.
 # SM90 (H100/H200) requires block_sparse_tensors in _flash_attn_bwd with mask_mod.
-_cuda_sm_major: int = torch.cuda.get_device_capability()[0] if torch.cuda.is_available() else 0
+_cuda_sm_major: int = accel.get_device_capability()[0] if accel.is_available() else 0
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -598,7 +600,7 @@ def get_eagle3_mask_mode() -> str:
 
 def _effective_mask_mode() -> str:
     """Return the effective mask mode, accounting for SM90 override."""
-    if _cuda_sm_major == 9:
+    if accel.is_cuda() and _cuda_sm_major == 9:
         return "closure"
     return _EAGLE3_MASK_MODE
 
@@ -1037,15 +1039,17 @@ class _EagleMaskedFlashAttnFunc(torch.autograd.Function):
             aux_tensors=aux_tensors,
         )
 
-        bwd_block_sparse = _get_block_sparse(
-            mask_mod_flex,
-            q_len,
-            kv_len,
-            bsz,
-            num_heads,
-            q.device,
-            direction="q",
-        )
+        bwd_block_sparse = None
+        if accel.is_cuda() and _cuda_sm_major == 9:
+            bwd_block_sparse = _get_block_sparse(
+                mask_mod_flex,
+                q_len,
+                kv_len,
+                bsz,
+                num_heads,
+                q.device,
+                direction="q",
+            )
 
         ctx.save_for_backward(q, k, v, out, lse)
         ctx.softmax_scale = softmax_scale
@@ -1651,7 +1655,7 @@ def warmup_flash_attention_masked(
     if not _has_cute_dsl or _flash_attn_fwd is None:
         return
     if device is None:
-        device = torch.cuda.current_device()
+        device = accel.current_device()
 
     mode = _effective_mask_mode()
     # Modes with closure-captured Q_LEN need one warmup per bucket;
@@ -1696,7 +1700,7 @@ def warmup_flash_attention_masked(
         out.sum().backward()
         del q_t, k_t, v_t, out
 
-    torch.cuda.synchronize()
+    accel.synchronize()
     print_with_rank(f"flash_attn cute DSL warmup complete ({len(buckets)} bucket(s)).")
 
 

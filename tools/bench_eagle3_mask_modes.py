@@ -42,6 +42,7 @@ import time
 
 import torch
 
+from torchspec.utils import accelerator as accel
 from torchspec.models.draft.llama3_eagle import (
     _build_eagle3_mask_pair,
     _EagleMaskedFlashAttnFunc,
@@ -104,13 +105,13 @@ def bench_mode(
     n_warmup: int = 3,
     n_iter: int = 10,
 ):
-    device = torch.cuda.current_device()
+    device = accel.current_device()
     softmax_scale = 1.0 / math.sqrt(head_dim)
 
     # Clear caches and set mode
     _clear_compile_caches()
     set_eagle3_mask_mode(mode)
-    torch.cuda.synchronize()
+    accel.synchronize()
 
     # --- Compile phase: time building all buckets ---
     snapped = sorted(set(_snap_q_len(ql, mode) for ql in q_lens))
@@ -128,7 +129,7 @@ def bench_mode(
         k = torch.randn(bsz, kv_len, num_kv_heads, head_dim, dtype=dtype, device=device)
         v = torch.randn(bsz, kv_len, num_kv_heads, head_dim, dtype=dtype, device=device)
         run_fwd_bwd(q, k, v, mask_mod_cute, mask_mod_flex, softmax_scale, sq, aux_tensors)
-        torch.cuda.synchronize()
+        accel.synchronize()
         del q, k, v
     compile_time = time.perf_counter() - t0
     print(f"  [{mode}] compile: {compile_time:.2f}s")
@@ -151,18 +152,18 @@ def bench_mode(
         for _ in range(n_warmup):
             q.grad = None
             run_fwd_bwd(q, k, v, mask_mod_cute, mask_mod_flex, softmax_scale, sq, aux_tensors)
-            torch.cuda.synchronize()
+            accel.synchronize()
 
         # Timed
-        torch.cuda.synchronize()
-        start_events = [torch.cuda.Event(enable_timing=True) for _ in range(n_iter)]
-        end_events = [torch.cuda.Event(enable_timing=True) for _ in range(n_iter)]
+        accel.synchronize()
+        start_events = [accel.Event(enable_timing=True) for _ in range(n_iter)]
+        end_events = [accel.Event(enable_timing=True) for _ in range(n_iter)]
         for i in range(n_iter):
             q.grad = None
             start_events[i].record()
             run_fwd_bwd(q, k, v, mask_mod_cute, mask_mod_flex, softmax_scale, sq, aux_tensors)
             end_events[i].record()
-        torch.cuda.synchronize()
+        accel.synchronize()
 
         times = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
         avg_ms = sum(times) / len(times)

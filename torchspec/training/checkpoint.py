@@ -32,6 +32,7 @@ import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict
 from torch.distributed.checkpoint.stateful import Stateful
 
+from torchspec.utils import accelerator as accel
 from torchspec.utils.logging import logger
 
 
@@ -258,8 +259,9 @@ def finalize_load(actor: Any, checkpoint_payload: dict[str, Any] | None) -> None
         rng_state = checkpoint_payload["rng"]
         if "torch" in rng_state:
             torch.set_rng_state(rng_state["torch"])
-        if torch.cuda.is_available() and "cuda" in rng_state:
-            torch.cuda.set_rng_state_all(rng_state["cuda"])
+        accel_key = accel.get_device_type()
+        if accel.is_available() and accel_key in rng_state:
+            accel.set_rng_state_all(rng_state[accel_key])
 
     metadata = checkpoint_payload.get("metadata") or {}
     iteration = checkpoint_payload.get("iteration")
@@ -275,7 +277,7 @@ def finalize_load(actor: Any, checkpoint_payload: dict[str, Any] | None) -> None
     if continual_training and hasattr(actor, "optimizer"):
         _restore_fp32_master_params(actor, checkpoint_payload["optimizer_dir"])
 
-    torch.cuda.synchronize()
+    accel.synchronize()
     dist.barrier()
 
 
@@ -285,7 +287,7 @@ def save(actor: Any, step: int) -> None:
     Saves model weights and optimizer state to separate directories.
     This allows loading weights without optimizer or deleting optimizer before loading.
     """
-    torch.cuda.synchronize()
+    accel.synchronize()
 
     base_dir = Path(actor.args.checkpoint_dir).expanduser()
     step_id = step + 1
@@ -318,7 +320,7 @@ def save(actor: Any, step: int) -> None:
 
     if dist.get_rank() == 0:
         rng_state = {"torch": torch.get_rng_state()}
-        rng_state["cuda"] = torch.cuda.get_rng_state_all()
+        rng_state[accel.get_device_type()] = accel.get_rng_state_all()
         torch.save(rng_state, checkpoint_dir / "rng.pt")
 
         metadata = {

@@ -7,6 +7,7 @@ import torch
 from transformers import AutoTokenizer
 
 from torchspec.transfer.mooncake import EagleMooncakeStore, MooncakeConfig
+from torchspec.utils import accelerator as accel
 
 os.environ["MOONCAKE_MASTER_HOST"] = "0.0.0.0"
 os.environ["MOONCAKE_MASTER_PORT"] = "50051"
@@ -71,7 +72,7 @@ if __name__ == "__main__":
     print("\n=== Fetching data from Mooncake Store ===")
     mooncake_config = MooncakeConfig.from_env()
     mooncake_store = EagleMooncakeStore(mooncake_config)
-    mooncake_store.setup(device="cuda")
+    mooncake_store.setup(device=accel.current_device_obj())
 
     hidden_dim = 12288
     last_hidden_dim = 4096
@@ -91,7 +92,7 @@ if __name__ == "__main__":
             "last_hidden_states": torch.bfloat16,
         }
 
-        data = mooncake_store.get(key, shapes=shapes, dtypes=dtypes, device="cuda")
+        data = mooncake_store.get(key, shapes=shapes, dtypes=dtypes, device=accel.current_device_obj())
         print(f"\n  Key: {key}")
         print(
             f"    hidden_states: shape={data.hidden_states.shape}, dtype={data.hidden_states.dtype}"

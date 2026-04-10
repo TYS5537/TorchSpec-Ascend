@@ -34,6 +34,7 @@ import torch
 import torch.distributed as dist
 
 from torchspec.config.inference_config import HFInferenceConfig
+from torchspec.utils import accelerator as accel
 from torchspec.config.mooncake_config import MooncakeConfig
 from torchspec.models.target import HFTargetModel
 from torchspec.transfer.mooncake.eagle_store import EagleMooncakeStore
@@ -90,7 +91,7 @@ class HFRunner:
             )
 
         store = EagleMooncakeStore(mooncake_config)
-        store.setup(device=torch.cuda.current_device())
+        store.setup(device=accel.current_device())
         self.mooncake_store = store
 
         tp_rank = self._get_tp_rank()

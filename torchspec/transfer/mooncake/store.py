@@ -32,6 +32,7 @@ from torchspec.transfer.mooncake.buffers import (
     GPUSendBuffer,
     HostBufferPool,
 )
+from torchspec.utils import accelerator as accel
 from torchspec.utils.logging import logger
 
 
@@ -55,7 +56,7 @@ class MooncakeHiddenStateStore(ABC):
         self._gpu_receive_buffer: Optional[GPUReceiveBuffer] = None
         self._gpu_send_buffer: Optional[GPUSendBuffer] = None
         self._gpu_direct_available = False
-        self._copy_stream: Optional[torch.cuda.Stream] = None
+        self._copy_stream: Optional[accel.Stream] = None
 
     def setup(self, device: torch.device | int | None = None) -> None:
         """Initialize the Mooncake Store client."""
@@ -108,13 +109,13 @@ class MooncakeHiddenStateStore(ABC):
             self._async_put_manager = AsyncPutManager(store=self._store, max_workers=pool_size)
             logger.info("Async put manager created (pool_size=%d)", pool_size)
 
-        if self.config.enable_gpu_direct and torch.cuda.is_available():
+        if self.config.enable_gpu_direct and accel.is_available():
             self._setup_gpu_direct(device)
 
-        if torch.cuda.is_available():
-            cuda_device = device if device is not None else torch.device("cuda")
-            self._copy_stream = torch.cuda.Stream(device=cuda_device)
-            logger.info("DtoH copy stream created on %s", cuda_device)
+        if accel.is_available():
+            stream_device = device if device is not None else accel.current_device_obj()
+            self._copy_stream = accel.Stream(device=stream_device)
+            logger.info("DtoH copy stream created on %s", stream_device)
 
         self._initialized = True
         self._init_event.set()
@@ -166,7 +167,7 @@ class MooncakeHiddenStateStore(ABC):
                 "GPU Direct RDMA enabled: receive=%.1fMB, send=%s on %s",
                 self._gpu_receive_buffer.size / (1024**2),
                 send_desc,
-                device or "cuda",
+                device or accel.current_device_obj(),
             )
 
         except Exception as e:

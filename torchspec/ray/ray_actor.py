@@ -25,6 +25,7 @@ import ray
 import torch
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
+from torchspec.utils import accelerator as accel
 from torchspec.utils.logging import logger
 from torchspec.utils.misc import _to_local_gpu_id, get_current_node_ip, get_free_port
 
@@ -84,7 +85,7 @@ class RayActor:
             gpu_ids = ray.get_gpu_ids()
             base_gpu_id = int(float(gpu_ids[0])) if gpu_ids else 0
         local_gpu_id = self.resolve_local_gpu_id(base_gpu_id)
-        torch.cuda.set_device(local_gpu_id)
+        accel.set_device(local_gpu_id)
         os.environ["LOCAL_RANK"] = str(local_gpu_id)
         return local_gpu_id
 

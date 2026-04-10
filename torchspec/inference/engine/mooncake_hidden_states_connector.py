@@ -40,6 +40,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import torch
 from vllm.config import VllmConfig, get_layers_from_vllm_config
+
+from torchspec.utils import accelerator as accel
 from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     KVConnectorBase_V1,
     KVConnectorMetadata,
@@ -196,8 +198,8 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             self._mooncake_store = EagleMooncakeStore(config)
 
             device: torch.device | None = None
-            if torch.cuda.is_initialized():
-                device = torch.device(f"cuda:{torch.cuda.current_device()}")
+            if accel.is_initialized():
+                device = accel.current_device_obj()
             self._mooncake_store.setup(device=device)
             self._mooncake_setup_done = True
             logger.info(

@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from torchspec.models.ops.loss_mask import compute_assistant_loss_mask
+from torchspec.utils import accelerator as accel
 
 
 def _reference_loss_mask(input_ids, assistant_header_ids, end_token_ids):
@@ -51,6 +52,16 @@ def _check_gpu(input_ids, header_ids, end_ids, expected):
     result = compute_assistant_loss_mask(ids, header_ids, end_ids)
     assert torch.equal(result.cpu(), expected_t), (
         f"GPU mismatch: {result.cpu().tolist()} != {expected}"
+    )
+
+
+@pytest.mark.skipif(not accel.is_npu(), reason="NPU not available")
+def _check_npu(input_ids, header_ids, end_ids, expected):
+    ids = torch.tensor(input_ids, dtype=torch.long, device="npu")
+    expected_t = torch.tensor(expected, dtype=torch.long)
+    result = compute_assistant_loss_mask(ids, header_ids, end_ids)
+    assert torch.equal(result.cpu(), expected_t), (
+        f"NPU mismatch: {result.cpu().tolist()} != {expected}"
     )
 
 

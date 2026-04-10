@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
+from torchspec.utils import accelerator as accel
+
 from torchspec.utils.logging import logger
 
 
@@ -167,9 +169,9 @@ class AsyncPutManager:
         *wait_event* is an optional CUDA event to synchronize on before the
         RDMA transfer (used when DtoH staging runs on a separate stream).
 
-        *device_index* is the CUDA device ordinal that owns *wait_event*.
+        *device_index* is the device ordinal that owns *wait_event*.
         Worker threads do not inherit the caller's device context, so the
-        worker must call ``torch.cuda.set_device`` before synchronizing.
+        worker must call ``accel.set_device`` before synchronizing.
 
         GPU tensor lifetime is managed by the caller via
         ``record_stream`` — the CUDA caching allocator keeps the underlying
@@ -190,7 +192,7 @@ class AsyncPutManager:
     ) -> None:
         if wait_event is not None:
             if device_index is not None:
-                torch.cuda.set_device(device_index)
+                accel.set_device(device_index)
             wait_event.synchronize()
         with self._put_lock:
             results = self._store.batch_put_from(keys, buffer_ptrs, sizes)
@@ -235,7 +237,7 @@ class _GPUBuffer:
 
     def __init__(self, size: int, device: torch.device = None):
         self.size = size
-        self.device = torch.device(device) if device is not None else torch.device("cuda")
+        self.device = torch.device(device) if device is not None else accel.current_device_obj()
         self._tensor: Optional[torch.Tensor] = None
         self._ptr: int = 0
         self._initialized = False

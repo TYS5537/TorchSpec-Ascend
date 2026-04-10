@@ -23,6 +23,8 @@ import json
 import os
 from typing import Optional
 
+from torchspec.utils import accelerator as accel
+
 import torch
 import torch.nn as nn
 from huggingface_hub import snapshot_download
@@ -53,10 +55,12 @@ class TargetLMHead(nn.Module):
         norm_key: str = "model.norm.weight",
         load_norm: bool = False,
         cache_dir: Optional[str] = None,
-        device: str = "cuda",
+        device: Optional[str] = None,
         dtype: torch.dtype = torch.bfloat16,
         trust_remote_code: bool = False,
     ) -> "TargetLMHead":
+        if device is None:
+            device = accel.get_device_type()
         config = AutoConfig.from_pretrained(
             model_path, cache_dir=cache_dir, trust_remote_code=trust_remote_code
         )

@@ -24,6 +24,8 @@ from typing import List, Optional, Tuple
 import torch
 import torch.distributed as dist
 
+from torchspec.utils import accelerator as accel
+
 from torchspec import AutoDraftModelConfig, AutoEagle3DraftModel, Eagle3Model
 from torchspec.models.eagle3 import compute_lazy_target_padded, compute_target_p_padded
 from torchspec.training import checkpoint
@@ -172,7 +174,7 @@ class Eagle3Trainer(Trainer):
                     num_kv_heads=cfg.num_key_value_heads,
                     head_dim=head_dim,
                     dtype=torch.bfloat16,
-                    device=torch.cuda.current_device(),
+                    device=accel.current_device(),
                 )
 
         self.prof.on_init_end()
@@ -199,7 +201,7 @@ class Eagle3Trainer(Trainer):
                 lm_head_key=getattr(self.args, "lm_head_key", "lm_head.weight"),
                 norm_key=getattr(self.args, "norm_key", "model.norm.weight"),
                 load_norm=self._last_hs_prenorm,
-                device="cuda",
+                device=accel.get_device_type(),
                 dtype=torch.bfloat16,
                 trust_remote_code=getattr(self.args, "trust_remote_code", True),
             )
@@ -217,7 +219,7 @@ class Eagle3Trainer(Trainer):
             self.target_lm_head = TargetLMHead(config)
             if self._last_hs_prenorm:
                 self.target_lm_head._init_norm_structure()
-            self.target_lm_head.to(device="cuda", dtype=torch.bfloat16)
+            self.target_lm_head.to(device=accel.get_device_type(), dtype=torch.bfloat16)
             self.target_lm_head.eval()
             self.target_lm_head.requires_grad_(False)
 

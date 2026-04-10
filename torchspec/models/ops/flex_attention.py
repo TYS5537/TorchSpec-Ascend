@@ -20,12 +20,15 @@
 
 import torch
 import torch._dynamo as dynamo
+import torch.nn.functional as F
 from torch.nn.attention.flex_attention import (
     create_block_mask,
     flex_attention,
     or_masks,
 )
 from transformers.utils import is_torchdynamo_compiling
+
+from torchspec.utils import accelerator as accel
 
 dynamo.config.recompile_limit = 64
 
@@ -69,6 +72,18 @@ def compile_friendly_flex_attention(
     value: torch.Tensor,
     **kwargs,
 ) -> torch.Tensor:
+    if accel.is_npu():
+        # flex_attention depends on Triton which is unavailable on NPU;
+        # fall back to scaled_dot_product_attention with an explicit mask.
+        block_mask = kwargs.pop("block_mask", None)
+        attn_mask = None
+        if block_mask is not None and hasattr(block_mask, "to_dense"):
+            attn_mask = block_mask.to_dense()
+        # Remove flex_attention-only kwargs that SDPA doesn't accept.
+        for _k in ("score_mod", "return_lse", "kernel_options"):
+            kwargs.pop(_k, None)
+        return F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, **kwargs)
+
     # First call initialise singleton wrapper object, second call invokes the object method to return compiled flex attention
     # Do not use compiled version if already compiling forward (it raises issues)
     flex_attention_compiled = (
@@ -110,6 +125,11 @@ def compile_friendly_create_block_mask(
     KV_LEN,
     device,
 ):
+    if accel.is_npu():
+        # block_mask is a CUDA/Triton concept; return None so callers can
+        # pass it to compile_friendly_flex_attention which handles None.
+        return None
+
     create_block_mask_compiled = (
         WrappedCreateBlockMask()() if not is_torchdynamo_compiling() else create_block_mask
     )
