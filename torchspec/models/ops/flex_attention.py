@@ -77,10 +77,14 @@ def compile_friendly_flex_attention(
         # fall back to scaled_dot_product_attention with an explicit mask.
         block_mask = kwargs.pop("block_mask", None)
         attn_mask = None
-        if block_mask is not None and hasattr(block_mask, "to_dense"):
-            attn_mask = block_mask.to_dense()
-        # Remove flex_attention-only kwargs that SDPA doesn't accept.
-        for _k in ("score_mod", "return_lse", "kernel_options"):
+        if block_mask is not None:
+            if hasattr(block_mask, "to_dense"):
+                attn_mask = block_mask.to_dense()
+            elif isinstance(block_mask, torch.Tensor):
+                # Dense bool mask already materialized by compile_friendly_create_block_mask
+                attn_mask = block_mask
+        # Remove flex_attention-only kwargs and GQA flag that SDPA doesn't accept.
+        for _k in ("score_mod", "return_lse", "kernel_options", "enable_gqa"):
             kwargs.pop(_k, None)
         return F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, **kwargs)
 
@@ -126,9 +130,15 @@ def compile_friendly_create_block_mask(
     device,
 ):
     if accel.is_npu():
-        # block_mask is a CUDA/Triton concept; return None so callers can
-        # pass it to compile_friendly_flex_attention which handles None.
-        return None
+        # BlockMask is a Triton/CUDA concept unavailable on NPU.
+        # Materialise an equivalent dense bool mask [B, H, Q_LEN, KV_LEN] by
+        # evaluating mask_mod with broadcast tensor indices — no Triton needed.
+        # True = attend, False = masked out (matches F.scaled_dot_product_attention convention).
+        b_idx = torch.arange(B, device=device).view(B, 1, 1, 1)
+        h_idx = torch.arange(H, device=device).view(1, H, 1, 1)
+        q_idx = torch.arange(Q_LEN, device=device).view(1, 1, Q_LEN, 1)
+        kv_idx = torch.arange(KV_LEN, device=device).view(1, 1, 1, KV_LEN)
+        return mask_mod(b_idx, h_idx, q_idx, kv_idx)  # [B, H, Q_LEN, KV_LEN]
 
     create_block_mask_compiled = (
         WrappedCreateBlockMask()() if not is_torchdynamo_compiling() else create_block_mask

@@ -327,12 +327,13 @@ class TestFlexAttentionNPU(unittest.TestCase):
 
 @unittest.skipUnless(accel.is_npu(), "NPU not available")
 class TestEagle3FlexMaskNPU(unittest.TestCase):
-    """On NPU, compile_friendly_create_block_mask returns None and
-    compile_friendly_flex_attention falls back to SDPA.
-    Verify the complete path runs without error and produces finite output.
+    """On NPU, compile_friendly_create_block_mask materialises a dense bool mask
+    [B, H, Q_LEN, KV_LEN] via vectorised mask_mod evaluation, and
+    compile_friendly_flex_attention passes it directly to SDPA as attn_mask.
+    Verify the mask is non-trivial and the output is finite.
     """
 
-    def test_sdpa_fallback_runs(self):
+    def test_dense_mask_and_sdpa_fallback(self):
         B, H, S, D = 1, 1, 64, 64
         KV_LEN = S * 3
         data_type = torch.bfloat16
@@ -346,7 +347,13 @@ class TestEagle3FlexMaskNPU(unittest.TestCase):
             mask_mod=generate_eagle3_mask(seq_lengths=seq_lengths, Q_LEN=S, KV_LEN=KV_LEN),
             B=B, H=H, Q_LEN=S, KV_LEN=KV_LEN, device=query.device,
         )
-        self.assertIsNone(block_mask, "block_mask should be None on NPU")
+        # Dense bool tensor, not None
+        self.assertIsInstance(block_mask, torch.Tensor, "block_mask should be a dense tensor on NPU")
+        self.assertEqual(block_mask.shape, (B, H, S, KV_LEN))
+        self.assertEqual(block_mask.dtype, torch.bool)
+        # Mask must be non-trivial: not all-True (unmasked) and not all-False (fully masked)
+        self.assertTrue(block_mask.any(), "Mask should not be fully False")
+        self.assertFalse(block_mask.all(), "Mask should not be fully True (causal+suffix masking expected)")
 
         out = compile_friendly_flex_attention(query, key_cache, value_cache, block_mask=block_mask)
         self.assertEqual(out.shape, (B, H, S, D))
