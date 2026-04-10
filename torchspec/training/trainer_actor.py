@@ -51,6 +51,10 @@ class TrainerActor(RayActor):
         self.args = args
 
         backend = getattr(args, "distributed_backend", "nccl")
+        # On Ascend NPU the collective library is HCCL, not NCCL.  Auto-switch
+        # when the user left the default so they don't have to change configs.
+        if backend == "nccl" and accel.is_npu():
+            backend = "hccl"
         if getattr(args, "fsdp_cpu_offload", False) and getattr(args, "fsdp_cpu_backend", None):
             cpu_backend = args.fsdp_cpu_backend
             backend = f"cpu:{cpu_backend},{accel.get_device_type()}:{backend}"

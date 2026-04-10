@@ -54,6 +54,7 @@ from torchspec.models.ops.flex_attention import (
     compile_friendly_flex_attention,
     generate_eagle3_mask,
 )
+from torchspec.utils import accelerator as accel
 from torchspec.utils.logging import logger, print_with_rank
 
 
@@ -83,7 +84,6 @@ def _rotate_half_interleaved(x: torch.Tensor) -> torch.Tensor:
     return torch.stack((-x2, x1), dim=-1).flatten(-2)
 
 
-@torch.compile(dynamic=True)
 def _apply_rotary_pos_emb_interleaved(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     """Apply RoPE with interleaved rotation, accepting neox-layout cos/sin."""
     cos = cos.squeeze(1).squeeze(0)
@@ -96,6 +96,14 @@ def _apply_rotary_pos_emb_interleaved(q, k, cos, sin, position_ids, unsqueeze_di
     q_embed = (q * cos) + (_rotate_half_interleaved(q) * sin)
     k_embed = (k * cos) + (_rotate_half_interleaved(k) * sin)
     return q_embed, k_embed
+
+
+# TorchInductor (the torch.compile backend) depends on Triton which is
+# unavailable on Ascend NPU.  Skip compilation on NPU and run in eager mode.
+if not accel.is_npu():
+    _apply_rotary_pos_emb_interleaved = torch.compile(
+        _apply_rotary_pos_emb_interleaved, dynamic=True
+    )
 
 
 class DeepSeekMLAAttention(nn.Module):
@@ -423,12 +431,14 @@ class DeepSeekMLAFlexAttention(DeepSeekMLAAttention):
         seq_lengths = attention_mask.sum(dim=-1)
         seq_lengths -= lck
 
-        if q_len <= 128:
-            create_block_mask_func = create_block_mask
-            flex_attention_func = flex_attention
-        else:
+        # Always use compile_friendly wrappers on NPU (Triton unavailable);
+        # keep the raw path on CUDA for short sequences to avoid compile overhead.
+        if accel.is_npu() or q_len > 128:
             create_block_mask_func = compile_friendly_create_block_mask
             flex_attention_func = compile_friendly_flex_attention
+        else:
+            create_block_mask_func = create_block_mask
+            flex_attention_func = flex_attention
 
         block_mask = create_block_mask_func(
             mask_mod=generate_eagle3_mask(

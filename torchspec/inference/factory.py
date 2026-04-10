@@ -23,6 +23,7 @@
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from torchspec.ray.ray_actor import _accel_options
 from torchspec.utils.env import get_torchspec_env_vars
 from torchspec.utils.logging import logger
 
@@ -208,9 +209,9 @@ def _prepare_sgl_engines(
 
         engine = SglRayActor.options(
             num_cpus=0.2,
-            num_gpus=0.2,
             scheduling_strategy=scheduling_strategy,
             runtime_env={"env_vars": env_vars},
+            **_accel_options(0.2),
         ).remote(
             args=args,
             rank=i,
@@ -349,9 +350,9 @@ def _prepare_vllm_engines(
 
         engine = VllmRayActor.options(
             num_cpus=0.2,
-            num_gpus=0.2,
             scheduling_strategy=scheduling_strategy,
             runtime_env={"env_vars": env_vars},
+            **_accel_options(0.2),
         ).remote(
             args=args,
             rank=i,
@@ -468,9 +469,9 @@ def _create_and_init_actors(
 
         engine = ray_actor_cls.options(
             num_cpus=num_cpus,
-            num_gpus=num_gpus,
             scheduling_strategy=scheduling_strategy,
             runtime_env={"env_vars": env_vars},
+            **_accel_options(num_gpus),
         ).remote(**constructor_kwargs)
 
         engines.append(engine)

@@ -30,6 +30,51 @@ from torchspec.utils.logging import logger
 from torchspec.utils.misc import _to_local_gpu_id, get_current_node_ip, get_free_port
 
 
+def _get_accel_resource_name() -> str:
+    """Return the Ray resource name for the active accelerator.
+
+    NVIDIA CUDA → ``"GPU"`` (Ray built-in).
+    Ascend NPU  → ``"NPU"`` (custom resource; register with
+    ``ray start --resources='{"NPU": N}'`` or equivalent).
+    """
+    return "NPU" if accel.is_npu() else "GPU"
+
+
+def _get_accel_ids() -> list:
+    """Return the accelerator IDs assigned to the current Ray worker.
+
+    For CUDA uses ``ray.get_gpu_ids()`` (Ray manages CUDA_VISIBLE_DEVICES).
+    For NPU uses ``ray.get_resource_ids()`` with the ``"NPU"`` custom resource
+    key; falls back to an empty list if the resource is not tracked at
+    device granularity by this Ray installation.
+    """
+    resource_name = _get_accel_resource_name()
+    if resource_name == "GPU":
+        return ray.get_gpu_ids()
+    resource_ids = ray.get_resource_ids()
+    return [int(entry[0]) for entry in resource_ids.get(resource_name, [])]
+
+
+def _accel_options(fraction: float) -> dict:
+    """Return resource kwargs for ``ray.remote()`` / ``.options()`` calls.
+
+    On CUDA returns ``{"num_gpus": fraction}`` (Ray built-in GPU resource).
+    On NPU returns ``{"resources": {"NPU": fraction}}`` (custom resource).
+
+    Usage::
+
+        engine = SomeActor.options(
+            num_cpus=0.2,
+            **_accel_options(0.2),
+            scheduling_strategy=...,
+        ).remote(...)
+    """
+    resource_name = _get_accel_resource_name()
+    if resource_name == "GPU":
+        return {"num_gpus": fraction}
+    return {"resources": {resource_name: fraction}}
+
+
 def node_affinity_for_ip(ip: str, name: str = None) -> NodeAffinitySchedulingStrategy:
     """Return a NodeAffinitySchedulingStrategy pinned to the live Ray node with the given IP.
 
@@ -73,17 +118,22 @@ class RayActor:
         return _to_local_gpu_id(physical_gpu_id)
 
     def setup_gpu(self, base_gpu_id: int | None = None) -> int:
-        """Resolve GPU, set CUDA device, set LOCAL_RANK env var.
+        """Resolve accelerator device, set it as current, set LOCAL_RANK env var.
+
+        Works for both NVIDIA CUDA (ray.get_gpu_ids) and Ascend NPU
+        (ray.get_resource_ids with the "NPU" custom resource key).
 
         Args:
-            base_gpu_id: Physical GPU ID. If None, auto-detect from ray.get_gpu_ids().
+            base_gpu_id: Physical device ID. If None, auto-detect from Ray's
+                resource assignment for the current worker.
 
         Returns:
-            Local GPU ID.
+            Local device ID (0-based within CUDA_VISIBLE_DEVICES /
+            ASCEND_RT_VISIBLE_DEVICES).
         """
         if base_gpu_id is None:
-            gpu_ids = ray.get_gpu_ids()
-            base_gpu_id = int(float(gpu_ids[0])) if gpu_ids else 0
+            ids = _get_accel_ids()
+            base_gpu_id = int(float(ids[0])) if ids else 0
         local_gpu_id = self.resolve_local_gpu_id(base_gpu_id)
         accel.set_device(local_gpu_id)
         os.environ["LOCAL_RANK"] = str(local_gpu_id)

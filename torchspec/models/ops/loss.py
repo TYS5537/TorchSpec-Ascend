@@ -21,8 +21,9 @@
 import torch
 import torch.nn.functional as F
 
+from torchspec.utils import accelerator as accel
 
-@torch.compile(dynamic=None)
+
 def compiled_forward_kl_loss(
     prenorm_hidden_states_flat,
     target_p_flat,
@@ -31,7 +32,7 @@ def compiled_forward_kl_loss(
     lm_head_weight,
     norm_eps,
 ):
-    """torch.compile'd index_select + RMSNorm + lm_head + Forward KL loss.
+    """index_select + RMSNorm + lm_head + Forward KL loss.
 
     Takes full (B*T, ...) flat tensors and performs index_select inside the
     compiled graph so the compiler can fuse the gather with subsequent ops.
@@ -65,7 +66,12 @@ def compiled_forward_kl_loss(
     return loss, acc
 
 
-@torch.compile(dynamic=None)
+# TorchInductor (the torch.compile backend) depends on Triton which is
+# unavailable on Ascend NPU.  Skip compilation on NPU and run in eager mode.
+if not accel.is_npu():
+    compiled_forward_kl_loss = torch.compile(compiled_forward_kl_loss, dynamic=None)
+
+
 def compiled_forward_kl_loss_from_hs(
     prenorm_hidden_states_flat,
     target_hidden_states_flat,
@@ -75,7 +81,7 @@ def compiled_forward_kl_loss_from_hs(
     target_lm_head_weight,
     norm_eps,
 ):
-    """torch.compile'd index_select + target softmax + RMSNorm + lm_head + Forward KL loss.
+    """index_select + target softmax + RMSNorm + lm_head + Forward KL loss.
 
     Like compiled_forward_kl_loss but takes full (B*T, ...) flat tensors and
     performs index_select inside the compiled graph.  This lets the compiler
@@ -106,3 +112,9 @@ def compiled_forward_kl_loss_from_hs(
     acc = (logits.argmax(-1) == tp.argmax(-1)).float().mean()
 
     return loss, acc
+
+
+if not accel.is_npu():
+    compiled_forward_kl_loss_from_hs = torch.compile(
+        compiled_forward_kl_loss_from_hs, dynamic=None
+    )

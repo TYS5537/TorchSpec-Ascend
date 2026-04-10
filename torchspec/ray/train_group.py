@@ -26,6 +26,7 @@ import ray
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from torchspec.ray.ray_actor import _accel_options
 from torchspec.utils.env import get_torchspec_env_vars
 
 
@@ -90,9 +91,10 @@ class RayTrainGroup:
         if "TORCHINDUCTOR_CACHE_DIR" in os.environ:
             env_vars["TORCHINDUCTOR_CACHE_DIR"] = os.environ["TORCHINDUCTOR_CACHE_DIR"]
 
-        TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": env_vars})(
-            self._training_class
-        )
+        TrainRayActor = ray.remote(
+            runtime_env={"env_vars": env_vars},
+            **_accel_options(1),
+        )(self._training_class)
 
         # Create worker actors
         self._actor_handlers = []
@@ -100,11 +102,11 @@ class RayTrainGroup:
         for rank in range(world_size):
             actor = TrainRayActor.options(
                 num_cpus=num_gpus_per_actor,
-                num_gpus=num_gpus_per_actor,
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=reordered_bundle_indices[rank],
                 ),
+                **_accel_options(num_gpus_per_actor),
             ).remote(world_size, rank, master_addr, master_port)
             if rank == 0:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())

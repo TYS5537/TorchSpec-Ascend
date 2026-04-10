@@ -38,6 +38,14 @@ from torchspec.models.ops.flex_attention import (
 )
 from torchspec.utils.logging import logger, print_with_rank
 
+try:
+    import torch_npu as _torch_npu
+
+    _npu_fusion_attn = _torch_npu.npu_fusion_attention
+except ImportError:
+    _torch_npu = None
+    _npu_fusion_attn = None
+
 _flash_attn_import_error: ImportError | None = None
 try:
     # cutlass-dsl >= 4.4.2 removed cutlass.utils.ampere_helpers, but FA4
@@ -214,7 +222,6 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-@torch.compile(dynamic=True)
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
     cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
@@ -224,6 +231,12 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
+
+
+# TorchInductor (the torch.compile backend) depends on Triton which is unavailable
+# on Ascend NPU.  Skip compilation on NPU and run in eager mode instead.
+if not accel.is_npu():
+    apply_rotary_pos_emb = torch.compile(apply_rotary_pos_emb, dynamic=True)
 
 
 def apply_multimodal_rotary_pos_emb(q, k, cos, sin, mrope_section, unsqueeze_dim=1):
@@ -348,7 +361,6 @@ class LlamaRotaryEmbedding(torch.nn.Module):
         self.register_buffer("cos_cached", emb.cos()[None, None, :, :].to(dtype), persistent=False)
         self.register_buffer("sin_cached", emb.sin()[None, None, :, :].to(dtype), persistent=False)
 
-    @torch.compile(dynamic=True)
     def forward(self, x, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len and seq_len > self.max_seq_len_cached:
@@ -358,6 +370,9 @@ class LlamaRotaryEmbedding(torch.nn.Module):
             self.cos_cached[:, :, :seq_len, ...].to(dtype=x.dtype),
             self.sin_cached[:, :, :seq_len, ...].to(dtype=x.dtype),
         )
+
+    if not accel.is_npu():
+        forward = torch.compile(forward, dynamic=True)
 
 
 class LlamaLinearScalingRotaryEmbedding(LlamaRotaryEmbedding):
@@ -1362,12 +1377,16 @@ class LlamaFlexAttention(LlamaAttention):
         seq_lengths -= lck
         # TODO: Remove the usage of uncompiled create_block_mask after
         # https://github.com/pytorch/pytorch/issues/160018
-        if q_len <= 128:
-            create_block_mask_func = create_block_mask
-            flex_attention_func = flex_attention
-        else:
+        # Always route through compile_friendly wrappers on NPU: the raw
+        # create_block_mask / flex_attention require Triton which is unavailable
+        # on Ascend.  For CUDA the uncompiled path is kept for short sequences
+        # to avoid torch.compile overhead on small inputs.
+        if accel.is_npu() or q_len > 128:
             create_block_mask_func = compile_friendly_create_block_mask
             flex_attention_func = compile_friendly_flex_attention
+        else:
+            create_block_mask_func = create_block_mask
+            flex_attention_func = flex_attention
 
         block_mask = create_block_mask_func(
             mask_mod=generate_eagle3_mask(
@@ -1455,19 +1474,51 @@ class LlamaFlashAttention(LlamaAttention):
         k0 = cache_keys[:, 0]
         v0 = cache_values[:, 0]
 
-        assert _flash_attn_func is not None, (
-            f"flash_attn.cute is unavailable. ImportError: {_flash_attn_import_error!r}"
-        )
-        attn_output, lse = _flash_attn_func(
-            query_states,
-            k0,
-            v0,
-            softmax_scale=1.0 / math.sqrt(self.head_dim),
-            causal=True,
-        )
-        # Accumulate O in FP32 so the backward delta path (rowsum(dO·O)) stays accurate
-        attn_output = attn_output.float()
-        lse = lse.transpose(1, 2)
+        if accel.is_npu():
+            if _npu_fusion_attn is None:
+                raise RuntimeError(
+                    "torch_npu is required for NPU flash attention. "
+                    "Please install torch_npu matching your CANN version."
+                )
+            kv_len = k0.shape[1]
+            # NPU atten_mask convention: True = mask out (upper-triangle = future tokens)
+            causal_mask = torch.triu(
+                torch.ones(q_len, kv_len, dtype=torch.bool, device=query_states.device),
+                diagonal=1,
+            )
+            result = _npu_fusion_attn(
+                query_states,
+                k0,
+                v0,
+                self.num_heads,
+                "BSND",
+                scale=1.0 / math.sqrt(self.head_dim),
+                atten_mask=causal_mask,
+                sparse_mode=3,  # rightDown causal, equivalent to flash_attn >= 2.1
+                keep_prob=1.0,
+            )
+            attn_output = result[0].float()
+            # result[1]=softmax_max, result[2]=softmax_sum (split-K per-tile intermediates).
+            # Global per-token LSE = logsumexp over tiles of per-tile LSE_t = max_t + log(sum_t).
+            softmax_max = result[1].float()  # [bsz, num_heads, q_len, tiles]
+            softmax_sum = result[2].float()  # [bsz, num_heads, q_len, tiles]
+            per_tile_lse = softmax_max + torch.log(softmax_sum + 1e-8)
+            lse = torch.logsumexp(per_tile_lse, dim=-1)  # [bsz, num_heads, q_len]
+            lse = lse.transpose(1, 2)  # [bsz, q_len, num_heads]
+        else:
+            assert _flash_attn_func is not None, (
+                f"flash_attn.cute is unavailable. ImportError: {_flash_attn_import_error!r}"
+            )
+            attn_output, lse = _flash_attn_func(
+                query_states,
+                k0,
+                v0,
+                softmax_scale=1.0 / math.sqrt(self.head_dim),
+                causal=True,
+            )
+            # Accumulate O in FP32 so the backward delta path (rowsum(dO·O)) stays accurate
+            attn_output = attn_output.float()
+            lse = lse.transpose(1, 2)
 
         lck = cache_keys.shape[1]
         if lck > 1:
@@ -1598,25 +1649,54 @@ class LlamaFlashAttentionMasked(LlamaAttention):
         k_all = cache_keys.reshape(bsz, -1, self.num_key_value_heads, self.head_dim)
         v_all = cache_values.reshape(bsz, -1, self.num_key_value_heads, self.head_dim)
 
-        max_seq_len = q_len
-        mask_mod_cute, mask_mod_flex, aux_tensors = _build_eagle3_mask_pair(
-            q_len,
-            k_all.shape[1],
-            bsz,
-            lck,
-            hidden_states.device,
-        )
+        if accel.is_npu():
+            if _npu_fusion_attn is None:
+                raise RuntimeError(
+                    "torch_npu is required for NPU flash attention. "
+                    "Please install torch_npu matching your CANN version."
+                )
+            kv_len = k_all.shape[1]
+            # Build EAGLE3 attention mask as a dense bool tensor [q_len, kv_len].
+            # EAGLE3 pattern = causal (within the current block) OR
+            #                  suffix (same diagonal across past blocks).
+            # NPU atten_mask convention: True = mask out, False = attend.
+            qi = torch.arange(q_len, device=query_states.device).unsqueeze(1)    # [Q, 1]
+            ki = torch.arange(kv_len, device=query_states.device).unsqueeze(0)   # [1, KV]
+            causal_attend = qi >= ki                                              # [Q, KV]
+            suffix_attend = (ki >= q_len) & ((ki - qi) % q_len == 0)             # [Q, KV]
+            attn_mask_npu = ~(causal_attend | suffix_attend)                     # True = masked
 
-        attn_output = _EagleMaskedFlashAttnFunc.apply(
-            query_states,
-            k_all,
-            v_all,
-            mask_mod_cute,
-            mask_mod_flex,
-            1.0 / math.sqrt(self.head_dim),
-            max_seq_len,
-            aux_tensors,
-        )
+            result = _npu_fusion_attn(
+                query_states,
+                k_all,
+                v_all,
+                self.num_heads,
+                "BSND",
+                scale=1.0 / math.sqrt(self.head_dim),
+                atten_mask=attn_mask_npu,
+                keep_prob=1.0,
+            )
+            attn_output = result[0]
+        else:
+            max_seq_len = q_len
+            mask_mod_cute, mask_mod_flex, aux_tensors = _build_eagle3_mask_pair(
+                q_len,
+                k_all.shape[1],
+                bsz,
+                lck,
+                hidden_states.device,
+            )
+
+            attn_output = _EagleMaskedFlashAttnFunc.apply(
+                query_states,
+                k_all,
+                v_all,
+                mask_mod_cute,
+                mask_mod_flex,
+                1.0 / math.sqrt(self.head_dim),
+                max_seq_len,
+                aux_tensors,
+            )
 
         attn_output = attn_output.reshape(bsz, q_len, self.head_dim * self.num_heads)
         attn_output = self.o_proj(attn_output)
@@ -1752,13 +1832,15 @@ class LlamaRMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
 
-    @torch.compile(dynamic=True)
     def forward(self, hidden_states):
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         return self.weight * hidden_states.to(input_dtype)
+
+    if not accel.is_npu():
+        forward = torch.compile(forward, dynamic=True)
 
 
 class LlamaDecoderLayer(nn.Module):
