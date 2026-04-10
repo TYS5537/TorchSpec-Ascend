@@ -222,7 +222,7 @@ class HFRunner:
         if not self._initialized:
             self.setup()
 
-        input_ids_list = [ids.cuda() if not ids.is_cuda else ids for ids in input_ids_list]
+        input_ids_list = [ids.to(accel.get_device_type()) if not accel.is_on_accelerator(ids) else ids for ids in input_ids_list]
 
         inference_outputs = self._run_inference(
             input_ids=input_ids_list,

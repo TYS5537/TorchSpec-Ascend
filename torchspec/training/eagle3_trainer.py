@@ -235,8 +235,9 @@ class Eagle3Trainer(Trainer):
     # ------------------------------------------------------------------
 
     def _forward(self, batch: dict) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
-        input_ids = padding(batch["input_ids"], left=False).cuda()
-        target_hidden_states = padding(batch["last_hidden_states"], left=False).cuda()
+        _dev = accel.get_device_type()
+        input_ids = padding(batch["input_ids"], left=False).to(_dev)
+        target_hidden_states = padding(batch["last_hidden_states"], left=False).to(_dev)
 
         if self.verifier_norm is not None:
             with torch.no_grad():
@@ -245,7 +246,7 @@ class Eagle3Trainer(Trainer):
         loss_mask = batch["loss_mask"]
         if loss_mask.dim() == 3:
             loss_mask = loss_mask.squeeze(-1)
-        loss_mask = loss_mask.cuda()
+        loss_mask = loss_mask.to(_dev)
 
         if self.t2d is not None:
             target = compute_target_p_padded(
@@ -265,10 +266,10 @@ class Eagle3Trainer(Trainer):
 
         plosses, _, acces = self.model(
             input_ids=input_ids,
-            attention_mask=batch["attention_mask"].cuda(),
+            attention_mask=batch["attention_mask"].to(_dev),
             target=target,
             loss_mask=loss_mask,
-            hidden_states=batch["hidden_states"].cuda(),
+            hidden_states=batch["hidden_states"].to(_dev),
         )
         return plosses, acces
 
@@ -309,7 +310,7 @@ class Eagle3Trainer(Trainer):
             chunk = self._eval_cache[i : i + eval_mbs]
             batch = self._eval_collator(chunk)
             gpu_batch = {
-                k: v.cuda() if isinstance(v, torch.Tensor) else v for k, v in batch.items()
+                k: v.to(accel.get_device_type()) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
             }
             all_metrics.append(self.eval_forward(gpu_batch))
 
